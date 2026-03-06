@@ -47,6 +47,13 @@ struct key_callback
 	struct key_callback *next;
 };
 
+/* Return true to consume the key (not enqueued, not sent to OS). Runs before FIFO and key callbacks. */
+struct key_filter
+{
+	bool (*filter)(char key, enum key_state state);
+	struct key_filter *next;
+};
+
 struct key_lock_callback
 {
 	void (*func)(bool, bool);
@@ -59,6 +66,7 @@ bool keyboard_is_key_down(char key);
 bool keyboard_is_mod_on(enum key_mod mod);
 
 void keyboard_add_key_callback(struct key_callback *callback);
+void keyboard_add_filter(struct key_filter *filter);
 void keyboard_add_lock_callback(struct key_lock_callback *callback);
 
 bool keyboard_get_capslock(void);

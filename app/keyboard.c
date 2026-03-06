@@ -65,6 +65,7 @@ static struct
 {
 	struct key_lock_callback *lock_callbacks;
 	struct key_callback *key_callbacks;
+	struct key_filter *key_filters;
 
 	struct list_item list[LIST_SIZE];
 
@@ -308,6 +309,13 @@ static int64_t timer_task(alarm_id_t id, void *user_data)
 
 void keyboard_inject_event(char key, enum key_state state)
 {
+	struct key_filter *f = self.key_filters;
+	while (f) {
+		if (f->filter(key, state))
+			return;  /* consumed: don't enqueue, don't send to OS */
+		f = f->next;
+	}
+
 	const struct fifo_item item = { key, state };
 	if (!fifo_enqueue(item)) {
 		if (reg_is_bit_set(REG_ID_CFG, CFG_OVERFLOW_INT))
@@ -364,6 +372,18 @@ void keyboard_add_key_callback(struct key_callback *callback)
 		cb = cb->next;
 
 	cb->next = callback;
+}
+
+void keyboard_add_filter(struct key_filter *filter)
+{
+	if (!self.key_filters) {
+		self.key_filters = filter;
+		return;
+	}
+	struct key_filter *f = self.key_filters;
+	while (f->next)
+		f = f->next;
+	f->next = filter;
 }
 
 void keyboard_add_lock_callback(struct key_lock_callback *callback)

@@ -32,7 +32,7 @@ See the `boards` directory for a list of available boards.
 Optional CMake options (add to the `cmake` command):
 - `-DBACKLIGHT_INVERT=ON` — invert backlight PWM (e.g. for common-anode LEDs).
 - `-DBACKLIGHT_PERSIST=ON` — save the last backlight level to flash and restore it on power-up (no kernel change required; works with key-combo or I2C control).
-- `-DBACKLIGHT_IGNORE_HOST=ON` — host **turn-on** is ignored (so no backlight on unlock); host **turn-off** (value 0) is still accepted so the device can turn backlight off on lock. Backlight on or level changes are only via the firmware key combo, and optionally persisted if `BACKLIGHT_PERSIST=ON`. The combo is: **Sym or Alt (Right Alt) + the key that has 0 on it** (firmware sees that key as `~` or `0` depending on modifiers). If your kernel maps Sym to AltRight and that key to é, the same physical keys still trigger the combo.
+- `-DBACKLIGHT_IGNORE_HOST=ON` — host **turn-on** is ignored (so no backlight on unlock); host **turn-off** (value 0) is still accepted so the device can turn backlight off on lock. Backlight on or level changes are only via the firmware key combos, and optionally persisted if `BACKLIGHT_PERSIST=ON`. Combos: **Sym or Alt + key with 0** = toggle on/off; **Sym + Right Shift + digits 1–9** = set brightness level (1 = dimmest, 9 = full) and persist. If your kernel maps Sym to AltRight and that key to é, the same physical keys still trigger the toggle combo.
 
   To verify what the firmware sees for your keys: build with `-DCMAKE_BUILD_TYPE=Debug` (no `NDEBUG`), connect over UART (see board pins) or USB CDC, and watch the debug output when you press keys — you'll see lines like `key: 0x7E/126/~, state: 1` so you can confirm the key and modifier.
 
