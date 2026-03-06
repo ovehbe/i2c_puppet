@@ -58,13 +58,28 @@ void reg_process_packet(uint8_t in_reg, uint8_t in_data, uint8_t *out_buffer, ui
 	{
 		if (is_write) {
 #ifdef BACKLIGHT_IGNORE_HOST
-			if (reg != REG_ID_BKL)
+			/* For BKL: only accept host "turn off" (0); ignore turn-on so unlock doesn't override. */
+			if (reg == REG_ID_BKL && in_data != 0)
+				; /* ignore host turn-on */
+			else
 #endif
 				reg_set_value(reg, in_data);
 
 			switch (reg) {
 			case REG_ID_BKL:
-#ifndef BACKLIGHT_IGNORE_HOST
+#ifdef BACKLIGHT_IGNORE_HOST
+				if (in_data == 0) {
+					/* Host turn-off (e.g. on lock): apply so light turns off, don't persist. */
+					backlight_sync();
+				} else {
+					/* Host turn-on (e.g. on unlock): restore from persisted state; if last user state was on, apply it, else ignore. */
+					uint8_t saved = backlight_load_saved(0);
+					if (saved != 0) {
+						reg_set_value(REG_ID_BKL, saved);
+						backlight_sync();
+					}
+				}
+#else
 				backlight_sync();
 				backlight_schedule_save(in_data);
 #endif
