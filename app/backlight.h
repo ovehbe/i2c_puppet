@@ -17,8 +17,11 @@ static inline void backlight_schedule_save(uint8_t value) { (void)value; }
 #endif
 
 #ifdef BACKLIGHT_IGNORE_HOST
-/* Register key combo (RTALT+$) to toggle backlight in firmware. Call after keyboard_init(). */
+/* Register key combo (Sym/Alt+0) to toggle backlight in firmware. Call after keyboard_init(). */
 void backlight_register_toggle_combo(void);
+/* True for a short period after key combo changed backlight; use to ignore delayed host packets. */
+bool backlight_key_combo_cooldown_active(void);
 #else
 static inline void backlight_register_toggle_combo(void) { }
+static inline bool backlight_key_combo_cooldown_active(void) { return false; }
 #endif

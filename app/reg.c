@@ -58,9 +58,11 @@ void reg_process_packet(uint8_t in_reg, uint8_t in_data, uint8_t *out_buffer, ui
 	{
 		if (is_write) {
 #ifdef BACKLIGHT_IGNORE_HOST
-			/* For BKL: only accept host "turn off" (0); ignore turn-on so unlock doesn't override. */
-			if (reg == REG_ID_BKL && in_data != 0)
-				; /* ignore host turn-on */
+			/* Ignore host BKL writes for a short period after key combo changed backlight (avoids delayed lock/unlock packets overwriting). */
+			if (reg == REG_ID_BKL && backlight_key_combo_cooldown_active())
+				; /* ignore this host write */
+			else if (reg == REG_ID_BKL && in_data != 0)
+				; /* ignore host turn-on (we may restore from persisted below) */
 			else
 #endif
 				reg_set_value(reg, in_data);
@@ -68,7 +70,9 @@ void reg_process_packet(uint8_t in_reg, uint8_t in_data, uint8_t *out_buffer, ui
 			switch (reg) {
 			case REG_ID_BKL:
 #ifdef BACKLIGHT_IGNORE_HOST
-				if (in_data == 0) {
+				if (backlight_key_combo_cooldown_active()) {
+					/* already skipped above; nothing to do */
+				} else if (in_data == 0) {
 					/* Host turn-off (e.g. on lock): apply so light turns off, don't persist. */
 					backlight_sync();
 				} else {

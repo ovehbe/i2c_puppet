@@ -53,24 +53,54 @@ void backlight_init(void)
 /*
  * Backlight toggle: physical "Sym" (or Right Alt) + physical "0" key.
  * - Firmware keymap: that key is { '~', '0' } so we see '~' with Sym only, '0' with Alt.
- * - Kernel may map Sym to AltRight and the key to é; we match on what the firmware sends.
+ * - Also trigger on RELEASED when modifier is held, so one physical press still toggles
+ *   if the host/modifier timing made PRESSED see no modifier yet (avoids needing 2 clicks).
  */
+#define BACKLIGHT_COMBO_COOLDOWN_MS	500
+
+static bool combo_key_down;
+static bool toggled_this_press;
+/* Set so cooldown is inactive at boot until first key combo. */
+static uint32_t last_key_combo_ms = (uint32_t)-BACKLIGHT_COMBO_COOLDOWN_MS;
+
 static void backlight_toggle_cb(char key, enum key_state state)
 {
-	if (state != KEY_STATE_PRESSED)
-		return;
 	/* Key with 0 on it: firmware sends '~' (Sym+key) or '0' (Alt+key) */
 	if (key != '0' && key != '~')
 		return;
 	/* Sym key is often mapped to AltRight in kernel; accept either modifier */
-	if (!keyboard_is_mod_on(KEY_MOD_ID_SYM) && !keyboard_is_mod_on(KEY_MOD_ID_ALT))
-		return;
+	const bool mod_on = keyboard_is_mod_on(KEY_MOD_ID_SYM) || keyboard_is_mod_on(KEY_MOD_ID_ALT);
 
-	uint8_t cur = reg_get_value(REG_ID_BKL);
-	uint8_t next = cur ? 0 : 255;
-	reg_set_value(REG_ID_BKL, next);
-	backlight_sync();
-	backlight_schedule_save(next);
+	if (state == KEY_STATE_PRESSED) {
+		combo_key_down = true;
+		toggled_this_press = false;
+		if (mod_on) {
+			uint8_t cur = reg_get_value(REG_ID_BKL);
+			uint8_t next = cur ? 0 : 255;
+			reg_set_value(REG_ID_BKL, next);
+			backlight_sync();
+			backlight_schedule_save(next);
+			last_key_combo_ms = to_ms_since_boot(get_absolute_time());
+			toggled_this_press = true;
+		}
+	} else if (state == KEY_STATE_RELEASED) {
+		if (combo_key_down && mod_on && !toggled_this_press) {
+			uint8_t cur = reg_get_value(REG_ID_BKL);
+			uint8_t next = cur ? 0 : 255;
+			reg_set_value(REG_ID_BKL, next);
+			backlight_sync();
+			backlight_schedule_save(next);
+			last_key_combo_ms = to_ms_since_boot(get_absolute_time());
+		}
+		combo_key_down = false;
+		toggled_this_press = false;
+	}
+}
+
+bool backlight_key_combo_cooldown_active(void)
+{
+	uint32_t now = to_ms_since_boot(get_absolute_time());
+	return (now - last_key_combo_ms) < BACKLIGHT_COMBO_COOLDOWN_MS;
 }
 static struct key_callback backlight_toggle_key_cb = { .func = backlight_toggle_cb };
 
