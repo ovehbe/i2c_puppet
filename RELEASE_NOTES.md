@@ -6,7 +6,7 @@ Temporary firmware-only workaround until the kernel driver is updated. Build wit
 
 | Combo | Action |
 |---|---|
-| **Sym or Alt + key with 0** | Toggle backlight on/off |
+| **Sym + key with 0** | Toggle backlight on/off |
 | **Sym + Shift + digits 1–9** | Set brightness level (1 = dimmest, 9 = full) |
 
 Brightness combo keys are fully consumed by the firmware — no keypresses are sent to the OS.

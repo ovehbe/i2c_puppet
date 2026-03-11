@@ -98,11 +98,10 @@ static struct key_filter backlight_level_filter = { .filter = backlight_level_fi
 
 static void backlight_toggle_cb(char key, enum key_state state)
 {
-	/* Toggle: key with 0 on it — firmware sends '~' (Sym+key) or '0' (Alt+key) */
+	/* Toggle: key with 0 on it — firmware sends '~' when Sym is held */
 	if (key != '0' && key != '~')
 		return;
-	/* Sym key is often mapped to AltRight in kernel; accept either modifier */
-	const bool mod_on = keyboard_is_mod_on(KEY_MOD_ID_SYM) || keyboard_is_mod_on(KEY_MOD_ID_ALT);
+	const bool mod_on = keyboard_is_mod_on(KEY_MOD_ID_SYM);
 
 	if (state == KEY_STATE_PRESSED) {
 		combo_key_down = true;
