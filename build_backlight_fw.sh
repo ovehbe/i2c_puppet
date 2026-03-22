@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build i2c_puppet with BACKLIGHT_IGNORE_HOST + BACKLIGHT_PERSIST (Sym+0 toggle, save state).
+# Build i2c_puppet with BACKLIGHT_PERSIST (save/restore backlight level across power cycles).
 # Requires: cmake, gcc-arm-none-eabi, and 3rdparty/pico-sdk (clone if missing).
 
 set -e
@@ -16,7 +16,6 @@ mkdir -p build
 cd build
 cmake -DPICO_BOARD=bbq20kbd_breakout \
       -DCMAKE_BUILD_TYPE=Release \
-      -DBACKLIGHT_IGNORE_HOST=ON \
       -DBACKLIGHT_PERSIST=ON \
       ..
 make -j$(nproc)
