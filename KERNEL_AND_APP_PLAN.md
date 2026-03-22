@@ -157,9 +157,11 @@ if (bbqX0kbd_data->backlight_dev) {
 
 ### 1.5 Safe testing via module hot-swap (no kernel flash needed)
 
-The driver is already compiled as a loadable module (`CONFIG_KEYBOARD_BBQX0_KEYBOARD=m` in `arch/arm64/configs/q20_v12_factory.config`). This means you can test changes without reflashing the kernel — just cross-compile the module and swap it live via adb.
+The driver is compiled as a loadable module (`CONFIG_KEYBOARD_BBQX0_KEYBOARD=m` in `arch/arm64/configs/q20_v12_factory.config`). The stock `.ko` is packed inside the `vendor_boot` image (not on the regular filesystem), but it can still be swapped at runtime via `rmmod`/`insmod`.
 
-**Build just the module** (cross-compile on your dev machine):
+#### Step 1: Build the stock (unmodified) module first
+
+Before making any changes, cross-compile the **original** module so you have a known-good backup to swap back to without rebooting:
 
 ```bash
 cd /home/ovehbe/Code/q25-kernel-source
@@ -167,20 +169,42 @@ cd /home/ovehbe/Code/q25-kernel-source
 make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules M=drivers/input/keyboard/bbqX0kbd
 ```
 
-This produces `drivers/input/keyboard/bbqX0kbd/bbqX0kbd.ko`.
-
-**Push and swap on the phone:**
+Save the original:
 
 ```bash
-# Push the new module
-adb push drivers/input/keyboard/bbqX0kbd/bbqX0kbd.ko /tmp/
-
-# Swap it live (keyboard will briefly stop working for ~2 seconds)
-adb shell su -c "rmmod bbqX0kbd"
-adb shell su -c "insmod /tmp/bbqX0kbd.ko"
+mkdir -p /home/ovehbe/Code/q25-kernel-source/module-backups
+cp drivers/input/keyboard/bbqX0kbd/bbqX0kbd.ko module-backups/bbqX0kbd_stock.ko
 ```
 
-**Verify it worked:**
+#### Step 2: Build the modified module
+
+After applying the changes from sections 1.1–1.4, rebuild:
+
+```bash
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules M=drivers/input/keyboard/bbqX0kbd
+cp drivers/input/keyboard/bbqX0kbd/bbqX0kbd.ko module-backups/bbqX0kbd_backlight.ko
+```
+
+Now you have both modules:
+- `module-backups/bbqX0kbd_stock.ko` — original, no backlight sysfs
+- `module-backups/bbqX0kbd_backlight.ko` — modified, with backlight sysfs + resume fix
+
+#### Step 3: Push both to the phone
+
+```bash
+adb push module-backups/bbqX0kbd_stock.ko /data/local/tmp/bbqX0kbd_stock.ko
+adb push module-backups/bbqX0kbd_backlight.ko /data/local/tmp/bbqX0kbd_backlight.ko
+```
+
+#### Step 4: Swap to the modified module
+
+```bash
+# Keyboard will briefly stop working for ~2 seconds
+adb shell su -c "rmmod bbqX0kbd"
+adb shell su -c "insmod /data/local/tmp/bbqX0kbd_backlight.ko"
+```
+
+#### Step 5: Verify
 
 ```bash
 # Check if the backlight sysfs node appeared
@@ -193,27 +217,29 @@ adb shell su -c "echo 128 > /sys/class/backlight/bbq20kbd-backlight/brightness"
 adb shell cat /sys/class/backlight/bbq20kbd-backlight/brightness
 ```
 
-**If anything goes wrong:** just reboot the phone. It will load the original module from its filesystem on boot. No permanent changes are made until you deliberately install the module to the phone's `/lib/modules/` or reflash the kernel image.
+#### Swap back to stock (no reboot needed)
 
-**Once satisfied**, install the module permanently using a KernelSU module (see section 1.6) or by doing a full kernel rebuild and flash.
+```bash
+adb shell su -c "rmmod bbqX0kbd"
+adb shell su -c "insmod /data/local/tmp/bbqX0kbd_stock.ko"
+```
+
+#### If anything goes wrong
+
+Just reboot. The phone loads the original module from `vendor_boot` on every boot. Nothing on disk is modified.
 
 ### 1.6 Permanent deployment via KernelSU module
 
-Once the modified module is tested and working, you can make it survive reboots without reflashing the kernel by packaging it as a **KernelSU module**. This is a systemless overlay — the original `.ko` on disk is never modified, and disabling or uninstalling the KernelSU module reverts everything to stock.
+Once the modified module is tested and working, you can make it survive reboots without reflashing the kernel by packaging it as a **KernelSU module**. The stock `.ko` lives inside the `vendor_boot` image (not on a regular filesystem path), so the systemless overlay approach won't work. Instead, use a boot script that swaps the module after the stock one loads.
 
-**Step 1: Find where the stock module lives on the phone:**
-
-```bash
-adb shell find /system /vendor /lib -name "bbqX0kbd.ko" 2>/dev/null
-```
-
-**Step 2: Create the KernelSU module structure:**
+**Create the KernelSU module structure:**
 
 ```
 q25-kbd-backlight/
 ├── module.prop
 ├── post-fs-data.sh
-└── bbqX0kbd.ko           # your modified module
+├── bbqX0kbd_backlight.ko   # modified module
+└── bbqX0kbd_stock.ko       # original module (for rollback)
 ```
 
 **`module.prop`:**
@@ -227,23 +253,19 @@ author=ovehbe
 description=Replaces bbqX0kbd module with backlight sysfs support and resume fix
 ```
 
-**`post-fs-data.sh`** (loads the modified module on every boot):
+**`post-fs-data.sh`** (swaps the module on every boot):
 
 ```bash
 #!/system/bin/sh
 MODDIR="${0%/*}"
-# Wait for the stock module to be loaded, then swap it
 sleep 2
 rmmod bbqX0kbd 2>/dev/null
-insmod "$MODDIR/bbqX0kbd.ko"
+insmod "$MODDIR/bbqX0kbd_backlight.ko"
 ```
 
-> **Alternative approach:** If the stock module path is known (e.g., `/vendor/lib/modules/bbqX0kbd.ko`), you can use KernelSU's systemless overlay instead — place your `.ko` at the matching path inside a `system/` directory in the module, and KernelSU will mount it over the original automatically, so the system loads your version natively without needing `rmmod`/`insmod`.
-
-**Step 3: Package and install:**
+**Package and install:**
 
 ```bash
-# On your dev machine
 cd q25-kbd-backlight
 zip -r ../q25-kbd-backlight-v1.0.zip .
 
@@ -256,9 +278,19 @@ adb push ../q25-kbd-backlight-v1.0.zip /sdcard/
 - Survives reboots automatically
 - Survives OTA updates (reapplied on every boot)
 - Completely reversible — disable or uninstall from KernelSU Manager to revert to stock
-- No need to reflash the kernel until the fix is included in an official OS release
+- Both modules are bundled so the app (see Part 2) can switch between them
 
-### 1.7 Result after kernel changes
+### 1.7 Future: app-managed module switching
+
+The companion Android app (Part 2) can bundle both `.ko` files in its assets and manage the swap itself, with a root shell. This would let the user:
+
+- **Enable** backlight control: app runs `rmmod bbqX0kbd && insmod bbqX0kbd_backlight.ko`
+- **Disable** backlight control: app runs `rmmod bbqX0kbd && insmod bbqX0kbd_stock.ko`
+- **Auto-load on boot**: app registers a boot receiver that runs the swap script (same as the KernelSU module but managed from the app UI)
+
+This means rooted users wouldn't need KernelSU modules at all — the app handles everything, including rollback, from a single toggle in the UI.
+
+### 1.8 Result after kernel changes
 
 Once the kernel is rebuilt and booted:
 
@@ -392,13 +424,16 @@ fun writeBrightness(value: Int) {
 
 ## Part 3: Implementation order
 
-1. **Kernel: register backlight device** — this is the foundation everything else depends on
-2. **Kernel: fix resume** — delete the hardcoded `0xFF`, let it restore last brightness
-3. **Kernel: sync key combos** — make sysfs stay in sync with physical key combo changes
-4. **Test with shell commands** — verify `echo 128 > .../brightness` works, verify suspend/resume restores correctly
-5. **Flash the new firmware** (persist-only, no `BACKLIGHT_IGNORE_HOST`) — `firmware-backups/i2c_puppet_persist_only_*.uf2`
-6. **App: manual control** — slider + toggle writing to sysfs
-7. **App: auto-brightness** — light sensor + curve + periodic sysfs writes
+1. **Cross-compile stock module** — build the unmodified driver to have a known-good backup `.ko`
+2. **Kernel: register backlight device** — this is the foundation everything else depends on
+3. **Kernel: fix resume** — delete the hardcoded `0xFF`, let it restore last brightness
+4. **Kernel: sync key combos** — make sysfs stay in sync with physical key combo changes
+5. **Cross-compile modified module** — build the modified driver as `bbqX0kbd_backlight.ko`
+6. **Test via hot-swap** — push both `.ko` files, `rmmod`/`insmod` the modified one, verify sysfs works, swap back to stock if needed
+7. **Flash the new firmware** (persist-only, no `BACKLIGHT_IGNORE_HOST`) — `firmware-backups/i2c_puppet_persist_only_*.uf2`
+8. **Deploy permanently** — package as KernelSU module or let the app manage it
+9. **App: manual control** — slider + toggle + module switching (stock/backlight) for rooted users
+10. **App: auto-brightness** — light sensor + curve + periodic sysfs writes
 
 ---
 
