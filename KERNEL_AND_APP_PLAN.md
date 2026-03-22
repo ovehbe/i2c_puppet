@@ -2,11 +2,24 @@
 
 This document describes the exact kernel driver modifications and companion app needed to give userspace full control over the BBQ20 keyboard backlight — including software toggle, brightness adjustment, and optional auto-brightness via a luminance sensor.
 
+## Prerequisites (already done)
+
+The i2c_puppet firmware has already been rebuilt **without** `BACKLIGHT_IGNORE_HOST`, so the firmware now accepts all host writes to `REG_BKL`. It is built with `BACKLIGHT_PERSIST=ON` only, meaning:
+
+- Host (kernel) writes to `REG_BKL` are accepted and applied immediately
+- Firmware persists the last brightness level to flash across power cycles
+- Physical key combos on the keyboard still work (Sym+0 toggle, Sym+Shift+1–9 levels)
+
+Firmware backups are at `firmware-backups/` in the firmware repo:
+- `i2c_puppet_backlight_workaround_*.uf2` — old firmware with `BACKLIGHT_IGNORE_HOST` (rollback if needed)
+- `i2c_puppet_persist_only_*.uf2` — current firmware, accepts host writes
+
+**Firmware repo**: `https://github.com/ovehbe/i2c_puppet`
+
 ## Context
 
 - **Kernel source**: `/home/ovehbe/Code/q25-kernel-source`
 - **Driver path**: `drivers/input/keyboard/bbqX0kbd/`
-- **Firmware repo**: `https://github.com/ovehbe/i2c_puppet` (current firmware has `BACKLIGHT_IGNORE_HOST` workaround)
 - **I2C address**: `0x1F`
 - **Backlight register**: `REG_BKL` (`0x05`), write mask `0x80`, range 0–255
 
@@ -100,30 +113,20 @@ if (bbqX0kbd_data->backlight_dev)
 
 This is the critical bug: `bbqX0kbd_resume()` currently hardcodes `keyboardBrightness = 0xFF` (line 1222). It should restore the last-set brightness instead.
 
-**In `bbqX0kbd_suspend()`** (line 1171) — no changes needed. It already writes 0 to `REG_BKL` to turn off the backlight. The `keyboardBrightness` field retains its value (it's not zeroed here, only the register is written).
+**In `bbqX0kbd_suspend()`** (line 1171) — no changes needed. It already writes 0 to `REG_BKL` to turn off the backlight. The `bbqX0kbd_data->keyboardBrightness` field is NOT updated in suspend, so it still holds the last brightness.
 
-Wait — actually it IS zeroed because `registerValue = 0x00` is written. But `bbqX0kbd_data->keyboardBrightness` is NOT updated in suspend. So the field still holds the last brightness. Good.
-
-**In `bbqX0kbd_resume()`** (line 1200) — change line 1222 from:
+**In `bbqX0kbd_resume()`** (line 1200) — **delete line 1222**:
 
 ```c
-/* BEFORE (hardcodes full brightness): */
+/* DELETE this line: */
 bbqX0kbd_data->keyboardBrightness = 0xFF;
 ```
 
-To:
+The field already holds the last-set value from before suspend, and the write on line 1223 will restore it correctly.
+
+Also update the backlight device if it exists, so sysfs stays in sync. Add after the `REG_BKL` write in resume:
 
 ```c
-/* AFTER (restore last brightness — keyboardBrightness already holds it): */
-/* bbqX0kbd_data->keyboardBrightness is unchanged from before suspend */
-```
-
-Simply **delete line 1222** (`bbqX0kbd_data->keyboardBrightness = 0xFF;`). The field already holds the last-set value from before suspend, and the write on line 1223 will restore it.
-
-Also update the backlight device if it exists, so sysfs stays in sync:
-
-```c
-/* After the REG_BKL write in resume: */
 if (bbqX0kbd_data->backlight_dev)
     backlight_force_update(bbqX0kbd_data->backlight_dev, BACKLIGHT_UPDATE_HOTKEY);
 ```
@@ -176,29 +179,9 @@ echo 0 > /sys/class/backlight/bbq20kbd-backlight/brightness
 
 ---
 
-## Part 2: Firmware update (optional, after kernel is fixed)
+## Part 2: Android app for auto-brightness
 
-Once the kernel no longer hardcodes 0xFF on resume, you can rebuild the firmware **without** `BACKLIGHT_IGNORE_HOST`:
-
-```bash
-cmake -DPICO_BOARD=bbq20kbd_breakout \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DBACKLIGHT_PERSIST=ON \
-      ..
-```
-
-This restores normal host ↔ firmware cooperation:
-- Kernel writes to `REG_BKL` are accepted
-- Firmware still persists the level to flash (optional, via `BACKLIGHT_PERSIST=ON`)
-- Key combos on the keyboard still work
-
-Or keep `BACKLIGHT_IGNORE_HOST=ON` if you want the firmware to remain the sole authority — the kernel backlight device will still work for reading, and the firmware will handle the actual writes.
-
----
-
-## Part 3: Android app for auto-brightness
-
-### 3.1 Architecture
+### 2.1 Architecture
 
 ```
 ┌─────────────────────────────┐
@@ -221,7 +204,7 @@ Or keep `BACKLIGHT_IGNORE_HOST=ON` if you want the firmware to remain the sole a
 └─────────────────────────────┘
 ```
 
-### 3.2 Sysfs access from Android
+### 2.2 Sysfs access from Android
 
 The app needs to write to `/sys/class/backlight/bbq20kbd-backlight/brightness`. Options:
 
@@ -233,7 +216,7 @@ The app needs to write to `/sys/class/backlight/bbq20kbd-backlight/brightness`. 
 
 4. **HAL integration** (advanced): write a hardware abstraction layer that Android's `BrightnessService` talks to. This is the most work but makes it appear as a native Android setting.
 
-### 3.3 App features
+### 2.3 App features
 
 A minimal app would have:
 
@@ -242,7 +225,7 @@ A minimal app would have:
 - **Auto-brightness checkbox**: when enabled, registers a `SensorEventListener` for `TYPE_LIGHT`, maps lux to brightness via a curve, and writes to sysfs on each sensor event
 - **Brightness curve editor** (optional): let the user define min/max brightness and the lux thresholds
 
-### 3.4 Prototype: shell script
+### 2.4 Prototype: shell script
 
 Before building a full app, you can test the entire pipeline with a shell script:
 
@@ -276,7 +259,7 @@ while true; do
 done
 ```
 
-### 3.5 App implementation notes
+### 2.5 App implementation notes
 
 For a proper Android app (Kotlin):
 
@@ -304,19 +287,19 @@ fun writeBrightness(value: Int) {
 
 ---
 
-## Part 4: Implementation order
+## Part 3: Implementation order
 
 1. **Kernel: register backlight device** — this is the foundation everything else depends on
 2. **Kernel: fix resume** — delete the hardcoded `0xFF`, let it restore last brightness
 3. **Kernel: sync key combos** — make sysfs stay in sync with physical key combo changes
 4. **Test with shell commands** — verify `echo 128 > .../brightness` works, verify suspend/resume restores correctly
-5. **Firmware: optionally remove BACKLIGHT_IGNORE_HOST** — once kernel behaves correctly
+5. **Flash the new firmware** (persist-only, no `BACKLIGHT_IGNORE_HOST`) — `firmware-backups/i2c_puppet_persist_only_*.uf2`
 6. **App: manual control** — slider + toggle writing to sysfs
 7. **App: auto-brightness** — light sensor + curve + periodic sysfs writes
 
 ---
 
-## Part 5: Key reference — existing driver code locations
+## Part 4: Key reference — existing driver code locations
 
 | What | File | Line(s) |
 |------|------|---------|
