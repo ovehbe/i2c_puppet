@@ -195,9 +195,70 @@ adb shell cat /sys/class/backlight/bbq20kbd-backlight/brightness
 
 **If anything goes wrong:** just reboot the phone. It will load the original module from its filesystem on boot. No permanent changes are made until you deliberately install the module to the phone's `/lib/modules/` or reflash the kernel image.
 
-**Once satisfied**, install the module permanently by replacing the original `.ko` on the phone's filesystem or by doing a full kernel rebuild and flash.
+**Once satisfied**, install the module permanently using a KernelSU module (see section 1.6) or by doing a full kernel rebuild and flash.
 
-### 1.6 Result after kernel changes
+### 1.6 Permanent deployment via KernelSU module
+
+Once the modified module is tested and working, you can make it survive reboots without reflashing the kernel by packaging it as a **KernelSU module**. This is a systemless overlay — the original `.ko` on disk is never modified, and disabling or uninstalling the KernelSU module reverts everything to stock.
+
+**Step 1: Find where the stock module lives on the phone:**
+
+```bash
+adb shell find /system /vendor /lib -name "bbqX0kbd.ko" 2>/dev/null
+```
+
+**Step 2: Create the KernelSU module structure:**
+
+```
+q25-kbd-backlight/
+├── module.prop
+├── post-fs-data.sh
+└── bbqX0kbd.ko           # your modified module
+```
+
+**`module.prop`:**
+
+```properties
+id=q25-kbd-backlight
+name=Q25 Keyboard Backlight Control
+version=1.0
+versionCode=1
+author=ovehbe
+description=Replaces bbqX0kbd module with backlight sysfs support and resume fix
+```
+
+**`post-fs-data.sh`** (loads the modified module on every boot):
+
+```bash
+#!/system/bin/sh
+MODDIR="${0%/*}"
+# Wait for the stock module to be loaded, then swap it
+sleep 2
+rmmod bbqX0kbd 2>/dev/null
+insmod "$MODDIR/bbqX0kbd.ko"
+```
+
+> **Alternative approach:** If the stock module path is known (e.g., `/vendor/lib/modules/bbqX0kbd.ko`), you can use KernelSU's systemless overlay instead — place your `.ko` at the matching path inside a `system/` directory in the module, and KernelSU will mount it over the original automatically, so the system loads your version natively without needing `rmmod`/`insmod`.
+
+**Step 3: Package and install:**
+
+```bash
+# On your dev machine
+cd q25-kbd-backlight
+zip -r ../q25-kbd-backlight-v1.0.zip .
+
+# Install via KernelSU Manager app on the phone, or:
+adb push ../q25-kbd-backlight-v1.0.zip /sdcard/
+# Then install from KernelSU Manager → Modules → Install from storage
+```
+
+**Benefits:**
+- Survives reboots automatically
+- Survives OTA updates (reapplied on every boot)
+- Completely reversible — disable or uninstall from KernelSU Manager to revert to stock
+- No need to reflash the kernel until the fix is included in an official OS release
+
+### 1.7 Result after kernel changes
 
 Once the kernel is rebuilt and booted:
 
