@@ -155,7 +155,49 @@ if (bbqX0kbd_data->backlight_dev) {
 | `bbqX0kbd_main.c` | Sync backlight device in `bbqX0kbd_resume()` after REG_BKL write | ~line 1226 |
 | `bbqX0kbd_main.c` | Sync backlight device in `bbqX0kbd_set_brightness()` after REG_BKL write | ~line 281 |
 
-### 1.5 Result after kernel changes
+### 1.5 Safe testing via module hot-swap (no kernel flash needed)
+
+The driver is already compiled as a loadable module (`CONFIG_KEYBOARD_BBQX0_KEYBOARD=m` in `arch/arm64/configs/q20_v12_factory.config`). This means you can test changes without reflashing the kernel — just cross-compile the module and swap it live via adb.
+
+**Build just the module** (cross-compile on your dev machine):
+
+```bash
+cd /home/ovehbe/Code/q25-kernel-source
+# Use the same cross-compiler and defconfig as a normal kernel build
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules M=drivers/input/keyboard/bbqX0kbd
+```
+
+This produces `drivers/input/keyboard/bbqX0kbd/bbqX0kbd.ko`.
+
+**Push and swap on the phone:**
+
+```bash
+# Push the new module
+adb push drivers/input/keyboard/bbqX0kbd/bbqX0kbd.ko /tmp/
+
+# Swap it live (keyboard will briefly stop working for ~2 seconds)
+adb shell su -c "rmmod bbqX0kbd"
+adb shell su -c "insmod /tmp/bbqX0kbd.ko"
+```
+
+**Verify it worked:**
+
+```bash
+# Check if the backlight sysfs node appeared
+adb shell ls /sys/class/backlight/bbq20kbd-backlight/
+
+# Try setting brightness
+adb shell su -c "echo 128 > /sys/class/backlight/bbq20kbd-backlight/brightness"
+
+# Read it back
+adb shell cat /sys/class/backlight/bbq20kbd-backlight/brightness
+```
+
+**If anything goes wrong:** just reboot the phone. It will load the original module from its filesystem on boot. No permanent changes are made until you deliberately install the module to the phone's `/lib/modules/` or reflash the kernel image.
+
+**Once satisfied**, install the module permanently by replacing the original `.ko` on the phone's filesystem or by doing a full kernel rebuild and flash.
+
+### 1.6 Result after kernel changes
 
 Once the kernel is rebuilt and booted:
 
