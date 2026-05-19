@@ -21,6 +21,7 @@ struct list_item
 	enum key_state state;
 	bool mods[KEY_MOD_ID_LAST];
 	char effective_key;
+	uint8_t debounce_counter;
 };
 
 static const uint8_t row_pins[NUM_OF_ROWS] =
@@ -137,8 +138,19 @@ static void transition_to(struct list_item * const p_item, const enum key_state 
 	keyboard_inject_event(p_item->effective_key, next_state);
 }
 
+static uint8_t debounce_scans(void)
+{
+	uint8_t deb_ms = reg_get_value(REG_ID_DEB);
+	uint8_t frq_ms = reg_get_value(REG_ID_FRQ);
+	if (frq_ms == 0) frq_ms = 10;
+	uint8_t scans = deb_ms / frq_ms;
+	return (scans < 2) ? 2 : scans;
+}
+
 static void next_item_state(struct list_item * const p_item, const bool pressed)
 {
+	const uint8_t deb_threshold = debounce_scans();
+
 	switch (p_item->state) {
 		case KEY_STATE_IDLE:
 			if (pressed) {
@@ -182,31 +194,49 @@ static void next_item_state(struct list_item * const p_item, const bool pressed)
 				transition_to(p_item, KEY_STATE_PRESSED);
 
 				p_item->hold_start_time = to_ms_since_boot(get_absolute_time());
+				p_item->debounce_counter = 0;
 			}
 			break;
 
 		case KEY_STATE_PRESSED:
-			if ((to_ms_since_boot(get_absolute_time()) - p_item->hold_start_time) > (reg_get_value(REG_ID_HLD) * 10)) {
-				transition_to(p_item, KEY_STATE_HOLD);
-			 } else if(!pressed) {
-				transition_to(p_item, KEY_STATE_RELEASED);
+			if (!pressed) {
+				p_item->debounce_counter++;
+				if (p_item->debounce_counter >= deb_threshold) {
+					p_item->debounce_counter = 0;
+					transition_to(p_item, KEY_STATE_RELEASED);
+				}
+			} else {
+				p_item->debounce_counter = 0;
+				if ((to_ms_since_boot(get_absolute_time()) - p_item->hold_start_time) > (reg_get_value(REG_ID_HLD) * 10)) {
+					transition_to(p_item, KEY_STATE_HOLD);
+				}
 			}
 			break;
 
 		case KEY_STATE_HOLD:
-			if (!pressed)
-				transition_to(p_item, KEY_STATE_RELEASED);
+			if (!pressed) {
+				p_item->debounce_counter++;
+				if (p_item->debounce_counter >= deb_threshold) {
+					p_item->debounce_counter = 0;
+					transition_to(p_item, KEY_STATE_RELEASED);
+				}
+			} else {
+				p_item->debounce_counter = 0;
+			}
 			break;
 
 	case KEY_STATE_RELEASED:
 	{
 		if (pressed) {
-			// Key pressed again before fully released, continue as new press
-			p_item->effective_key = '\0';
-			p_item->hold_start_time = to_ms_since_boot(get_absolute_time());
-			transition_to(p_item, KEY_STATE_PRESSED);
+			p_item->debounce_counter++;
+			if (p_item->debounce_counter >= deb_threshold) {
+				p_item->debounce_counter = 0;
+				p_item->effective_key = '\0';
+				p_item->hold_start_time = to_ms_since_boot(get_absolute_time());
+				transition_to(p_item, KEY_STATE_PRESSED);
+			}
 		} else {
-			// Key fully released, clear entry
+			p_item->debounce_counter = 0;
 			if (p_item->p_entry->mod != KEY_MOD_ID_NONE)
 				self.mods[p_item->p_entry->mod] = false;
 
@@ -257,6 +287,7 @@ static int64_t timer_task(alarm_id_t id, void *user_data)
 				self.list[i].p_entry = &((const struct entry*)kbd_entries)[key_idx];
 				self.list[i].effective_key = '\0';
 				self.list[i].state = KEY_STATE_IDLE;
+				self.list[i].debounce_counter = 0;
 				next_item_state(&self.list[i], pressed);
 
 				break;
@@ -296,6 +327,7 @@ static int64_t timer_task(alarm_id_t id, void *user_data)
 			self.list[i].p_entry = &((const struct entry*)btn_entries)[b];
 			self.list[i].effective_key = '\0';
 			self.list[i].state = KEY_STATE_IDLE;
+			self.list[i].debounce_counter = 0;
 			next_item_state(&self.list[i], pressed);
 
 			break;
